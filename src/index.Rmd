@@ -1,0 +1,190 @@
+---
+title: "서울 행정구역별 노인 장기요양기관 정보 시각화"
+# author: "Kyungmin Lee"
+date: Sept 28, 2017
+output: html_notebook
+---
+  
+## 1. Intro
+
+노인요양시설을 알아본다는 건 이미 차고 넘치는 스트레스 상황을 겪고 난 후의 일일 것이다. 그런데 시설을 알아보는 일 또한 너무 어렵고 힘들다면?  
+
+그나마 국민건강보험공단 사이트에서 시설을 검색해볼 수는 있었지만 위치나 시설 정보를 꼼꼼히 따져보며 고르기에 UI는 너무 불편했고, 괜찮아 보이면서 정원이 남아있는 곳을 찾는 건 불가능에 가까울 정도로 시설(가깝고 평가 좋은)은 턱없이 부족했다. 노인요양시설을 도심에 더 많이 지을 수 없는 현실적인 이유도 있을 것이고 꼭 가까워야 하는지에 대한 의문(면회를 너무 자주 오는 것이 좋지 않다는 말도 있다)도 있을 것이다. 하지만 개인적으로 주변에서 이런 시설들이 흔하게 보이는 게 당연한 풍경이어야 한다는 생각도 있고, 시설을 알아보고 입소하는 일이 환자 가족들에게 또다른 스트레스가 되어선 안된다는 생각에 이 프로젝트를 계획하게 되었다.  
+
+비록 이건 그동안 공부한 R을 활용해 보는 연습 차원의 시각화지만, 실제 사이트에서도 검색 서비스가 좀 더 시각화되어 편리한 검색이 가능해지고 좋은 요양시설도 더 많아졌으면 하는 바람이다.  
+
+## 2. 방법
+### 2-1. 웹 데이터 수집 및 전처리
+* 장기요양기관 정보
+    + 국민건강보험공단의 [노인장기요양보험 사이트에서 장기요양기관 검색](http://www.longtermcare.or.kr/npbs/r/a/201/selectLtcoSrch) 결과 크롤링 후 전처리
+    + 공공데이터를 제공해주는 웬만한 포털은 다 뒤져봤지만 어디에도 위의 사이트에 나오는 정보가 모두 포함된 데이터가 없음.
+    + 자세한 코드는 [여기에](https://github.com/econpanna/SilverHomeOfSeoul/blob/master/src/crawl_preprocess.R)
+* 등급판정인구
+    + 치매 등으로 일상생활에서 도움(장기요양)이 필요하다는 판정을 받은 인구
+    + [공공데이터포털](https://www.data.go.kr/dataset/3051421/fileData.do)에서 다운로드
+
+### 2-2. 데이터 변환
+* 원하는 정보를 시각화하기 좋은 형태로 변환
+* 시각화에는 kormaps2014, moonBook2 패키지 활용
+* 위의 패키지 관련 자료는 [여기에](http://rstudio-pubs-static.s3.amazonaws.com/159183_794d3326ca09428eb519206440ff863d.html)
+```{r}
+rm(list=ls())
+## 패키지 불러오기
+library(kormaps2014)
+library(moonBook2)
+library(tidyverse)
+library(rvest)
+library(stringr)
+library(ggplot2)
+library(R.oo)
+```
+
+```{r}
+## 데이터 불러오기
+# 장기요양기관 데이터
+ltc_dat <- read.csv('data/longtermcare_seoul.csv')
+ltc_dat %>% str # data.frame
+
+# 등급판정인구 데이터
+nurs_pop_dat <- read.csv('data/nurs_pop_by_sigungu_20170731.csv', fileEncoding = 'cp949')
+nurs_pop_dat %>% str # data.frame
+
+# View(nurs_pop_dat) # 확인
+# 컬럼 이름 영문으로
+colnames(nurs_pop_dat) <- c('si_do','si_gun_gu','type','sex','age_group','apply_n','accept_total',
+                            'grade_1','grade_2','grade_3','grade_4','grade_5','grade_none')
+
+```
+
+```{r}
+## 데이터 변환
+# 재가 형태가 아닌 '노인요양시설(개정법)','노인요양공동생활가정' 두 가지만: ltc_dat_filtered
+ltc_dat_filtered <- ltc_dat %>% 
+  filter(type %in% c('노인요양시설(개정법)','노인요양공동생활가정'))
+# ltc_dat_filtered %>% View # 확인
+
+# 서울 내 구별 시설 수 & 수용가능인원: seoul_ltc_by_gu
+seoul_ltc_by_gu <- ltc_dat_filtered %>% 
+                     group_by(addr_gu) %>%
+                     summarise(ltc_gu_n = n(),  # 구별 시설 수
+                               ltc_gu_capa = sum(capacity)) %>% # 구별 시설 수용가능인원
+                     ungroup() %>% 
+                     mutate(addr_gu= as.character(addr_gu)) # join을 위해 character 변환  
+# View(seoul_ltc_by_gu) # 확인
+seoul_ltc_by_gu %>% str
+
+# 서울 내 구별 1~2등급(시설 즉시 입소가능 등급) 인구수: nurs_n_by_gu
+nurs_n_by_gu <- nurs_pop_dat %>% 
+                  filter(si_do %in% c('서울특별시')) %>% 
+                  group_by(si_gun_gu) %>% 
+                  summarise(nurs_gu_n = sum(grade_1 + grade_2)) %>% # 구별 등급인구
+                  ungroup() %>% 
+                  mutate(addr_gu= as.character(si_gun_gu)) %>%  # join을 위해 character 변환
+                  select(-si_gun_gu)
+# View(nurs_n_by_gu) # 확인 
+nurs_n_by_gu %>% str
+
+# 서울 내 구별 시설 수, 수용가능인원, 등급판정인구(left join), + 실수용력(?) : seoul_ltc_nurs_by_gu
+# '실수용력'은 만들어본 말: 수용가능인원 - 등급판정인구
+seoul_ltc_nurs_by_gu <- seoul_ltc_by_gu %>% 
+                          left_join(nurs_n_by_gu, by='addr_gu') %>% 
+                          mutate(actual_capa = ltc_gu_capa - nurs_gu_n)
+# View(seoul_ltc_nurs_by_gu) # 확인 
+seoul_ltc_nurs_by_gu %>% str
+```
+
+```{r}
+# kormap2014 내장 데이터
+# kormap1 : 2014년 한국행정지도(시도별)
+# kormap2 : 2014년 한국행정지도(시군구별)
+# kormap3 : 2014년 한국행정지도(읍면동별)
+# 행정구별 시각화이므로 kormap2 활용
+# View(korpop2)
+korpop2 %>% str # 행정구역별_읍면동 컬럼은 factor type
+```
+
+```{r}
+# korpop2 에서 code가 11로 시작하는(=서울) 데이터만: korpop2_seoul
+korpop2_seoul <- korpop2 %>%
+                   filter(grepl('^11', code)) %>% 
+                   mutate(kor_gu = trimws(as.character(행정구역별_읍면동))) # join 위해 내장 데이터 구 이름 character 변환 후 공백 제거
+
+# korpop2_seoul에 서울 구별 시설 수, 수용가능인원, 등급판정인구, 실수용력 병합(left join)
+# (아래에서 사용할 ggChoropleth 함수가 어떤 변수를 사용하는지 정확히 모르므로 일단 korpop2 변수는 다 남겨둠)
+# seoul_gu_dat
+seoul_gu_dat <- korpop2_seoul %>% 
+                  left_join(seoul_ltc_nurs_by_gu, by=c('kor_gu'='addr_gu')) 
+# View(seoul_gu_dat)
+```
+
+
+## 3. 시각화 결과
+* 총 네 가지 - 행정구역별 시설 수, 수용가능인원, 등급판정인구, 실수용력
+* interactive plot - 마우스 휠을 사용하여 축소/확대 가능 & 마우스 올리면 tooltip 나타남
+
+### 3-1. 노인요양시설 분포 (재가 서비스 제외)
+```{r}
+# 한글 설정
+theme_set(theme_gray(base_family="NanumGothic"))
+
+# 서울 행정구역별 노인요양시설 수
+seoul_gu_dat <- seoul_gu_dat %>% 
+                  mutate(시설_수= ltc_gu_n)
+ggChoropleth(seoul_gu_dat, kormap2, fillvar='시설_수',
+             # colors=c('#FFFFFF','#637EE9','#0432E5'), # 그라데이션 색은 바뀌는데 hover색이 안바뀜 
+             subarea=c('서울'),
+             interactive = T, 
+             tooltip='행정구역별_읍면동',
+             title= '서울 행정구역별 노인요양시설 수 (마우스를 올려보세요)')
+```
+행정구역별 시설 수를 우선 시각화해보았다. 색이 진할 수록 시설 수가 많은 것이다. 도봉구를 필두로 강북지역에 시설이 많고 중부와 강남 지역이 시설 수가 적은 것으로 보인다.
+
+### 3-2. 수용 가능 인원
+```{r}
+# 서울 행정구역별 노인요양시설 수용인원
+seoul_gu_dat <- seoul_gu_dat %>% 
+                  mutate(수용인원= ltc_gu_capa)
+ggChoropleth(seoul_gu_dat, kormap2, fillvar='수용인원',
+             subarea=c('서울'),
+             interactive = T, 
+             tooltip='행정구역별_읍면동',
+             title='서울 행정구역별 노인요양시설 수용인원 (마우스를 올려보세요)')
+```
+사실, 시설 수보다는 시설 수용인원이 더 중요할 것이다. 수용인원으로 보니 조금 달라지는 양상도 있지만 대체로 시설 수와 비례하는 분포이다.
+
+### 3-3. 등급판정 인구 (1 ~ 2 등급)
+```{r}
+# 서울 행정구역별 1~2 등급 판정 인구 (일단 즉시 입소 가능 등급인 1~2 등급에 한정)
+seoul_gu_dat <- seoul_gu_dat %>% 
+                  mutate(등급인구= nurs_gu_n)
+ggChoropleth(seoul_gu_dat, kormap2, fillvar='등급인구',
+             subarea=c('서울'),
+             interactive = T, 
+             tooltip='행정구역별_읍면동',
+             title='서울 행정구역별 1 ~ 2등급 판정 인구 (마우스를 올려보세요)')
+```
+시설 수나 수용인원이 적더라도 해당 구역에 시설이 필요한 인구도 적다면 ~~꼭 같은 구역에 시설이 있어야 하는지는 차치하고~~ 문제는 없다. 하지만 위의 두 분포와는 좀 더 양상이 달라지는 모습이다..
+
+### 3-4. 실수용력 (수용가능인원 - 등급판정인구)
+```{r}
+# 서울 행정구역별 실수용력
+# 실수용력(임의로 지어본 이름..)
+# 수용가능인원 - 등급판정인구. 즉, 행정구역별로 1 ~ 2등급 인구를 모두 수용했을 때 남는 수용가능인원..
+seoul_gu_dat <- seoul_gu_dat %>% 
+                  mutate(실수용력= actual_capa)
+ggChoropleth(seoul_gu_dat, kormap2, fillvar='실수용력',
+             subarea=c('서울'),
+             interactive = T, 
+             tooltip='행정구역별_읍면동',
+             title='서울 행정구역 별 노인요양시설 실수용력 (마우스를 올려보세요)')
+```
+좀 더 확실한 비교를 위해 수용가능인원에서 등급판정인구를 뺀 수를 시각화해보았다. 즉, 행정구역별로 1~2등급 인구를 시설에서 모두 수용했다고 가정했을 때 남는 수용가능인원이다. 색이 진할 수록 수용력이 좋은 것이고 색이 연할수록 나쁜 것이긴 한데, 0부터 시작하는 고정된 범위의 수치가 아니므로 색 자체는 큰 의미 없다. 도봉구, 광진구, 금천구를 제외하고는 모두 마이너스이다. 즉, 시설이 부족하다.
+
+## 4. 마치며
+* 1~2 등급 판정을 받은 인구만 반영한 결과이다. 나머지 등급 인구(절차를 거쳐 입소 가능)나 아직 판정만 받지 못한 인구까지 고려하면 시설이 정말 턱없이 부족하다고 할 수 있다.
+* 한계
+    + 수용인원 등이 정확한 수치가 아닐 수 있음. 업데이트가 잘 안되어 있는 느낌.
+    + 실수용력 계산법의 한계. 다른 계산법도 생각해보든지 서울 외 다른 지역도 포함하든지.
+    + 체크박스 등으로 시설을 평가등급별로, 인구수를 판정등급별로 interactive하게 나타내보려 했으나 아직 못함.
+    + 시설별 위치도 표시하려 했으나 아직 못함.
+    + 지도 시각화 색깔 바꾸는 법? 그라데이션 색은 쉽게 바꿀수 있는데 마우스를 올렸을 때 활성화되는 색 바꾸는 법을 좀 더 찾아봐야 할 듯.
