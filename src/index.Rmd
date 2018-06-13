@@ -18,7 +18,7 @@ output: html_notebook
 * 장기요양기관 정보
     + 국민건강보험공단의 [노인장기요양보험 사이트에서 장기요양기관 검색](http://www.longtermcare.or.kr/npbs/r/a/201/selectLtcoSrch) 결과 크롤링 후 전처리
     + 공공데이터를 제공해주는 웬만한 포털은 다 뒤져봤지만 어디에도 위의 사이트에 나오는 정보가 모두 포함된 데이터가 없음.
-    + 자세한 코드는 [여기에](https://github.com/econpanna/SilverHomeOfSeoul/blob/master/src/crawl_preprocess.R)
+    + 크롤링 및 전처리 코드는 [여기에](https://github.com/econpanna/silver-home-of-seoul/blob/master/src/crawl_preprocess.R)
 * 등급판정인구
     + 치매 등으로 일상생활에서 도움(장기요양)이 필요하다는 판정을 받은 인구
     + [공공데이터포털](https://www.data.go.kr/dataset/3051421/fileData.do)에서 다운로드
